@@ -27,7 +27,7 @@ jobs:
       - name: 📤 Copy files to server
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.HOST }}
+          host: ${{ secrets.SERVER_IP }}
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: ".next,package.json,package-lock.json,prisma"
