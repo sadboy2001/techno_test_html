@@ -30,7 +30,7 @@ jobs:
           host: ${{ secrets.SERVER_IP }}
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: ".next,package.json,package-lock.json,prisma"
+          source: ".next,app,components,lib,public,package.json,package-lock.json,prisma"
           target: "/root/technograd"
 
       - name: 🚀 Restart app
