@@ -21,7 +21,6 @@ jobs:
           script: |
             cd ~/technograd
             git pull origin main
-            npm install
-            rm -rf .next
+            npm ci --omit=dev --prefer-offline --no-audit
             npm run build
-            pm2 restart technograd
+            pm2 reload technograd
