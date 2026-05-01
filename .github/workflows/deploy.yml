@@ -6,21 +6,40 @@ on:
       - main
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v1.0.0
+      - name: 📥 Clone repo
+        uses: actions/checkout@v3
 
+      - name: 🟢 Setup Node
+        uses: actions/setup-node@v3
         with:
-          host: ${{ secrets.SERVER_IP }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          node-version: 18
 
+      - name: 📦 Install deps
+        run: npm ci
+
+      - name: 🏗 Build project
+        run: npm run build
+
+      - name: 📤 Copy files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: ".next,package.json,package-lock.json,prisma"
+          target: "/root/technograd"
+
+      - name: 🚀 Restart app
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd ~/technograd
-            git pull origin main
-            npm ci --prefer-offline --no-audit
-            npm run build
+            cd /root/technograd
+            npm install --omit=dev
             pm2 restart technograd
