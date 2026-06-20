@@ -108,13 +108,13 @@ try {
 } catch(e) { console.error('finalCourseData extract failed:', e.message) }
 
 // ── Seed database ─────────────────────────────────────────────
-async function seedCourse(courseId, courseTitle, chapters, parentId) {
+async function seedCourse(courseId, courseTitle, chapters, parentId, icon) {
   console.log(`\nSeeding course: ${courseId} (${chapters.length} chapters)`)
 
   await prisma.course.upsert({
     where: { id: courseId },
-    update: { title: courseTitle, parentId: parentId || null },
-    create: { id: courseId, title: courseTitle, order: courseId === 'basic' ? 0 : courseId === 'advanced' ? 1 : 2, parentId: parentId || null }
+    update: { title: courseTitle, parentId: parentId || null, icon: icon || null },
+    create: { id: courseId, title: courseTitle, order: courseId === 'basic' ? 0 : courseId === 'advanced' ? 1 : 2, parentId: parentId || null, icon: icon || null }
   })
 
   let totalSteps = 0
@@ -181,13 +181,13 @@ async function main() {
   console.log('✓ Parent course: testing (Тестирование ПО)')
 
   if (courseData.length > 0)
-    await seedCourse('basic', 'Основной курс', courseData, 'testing')
+    await seedCourse('basic', 'Основной курс', courseData, 'testing', '📘')
   
   if (advancedCourseData.length > 0)
-    await seedCourse('advanced', 'Продвинутый курс', advancedCourseData, 'testing')
+    await seedCourse('advanced', 'Продвинутый курс', advancedCourseData, 'testing', '🚀')
   
   if (finalCourseData.length > 0)
-    await seedCourse('final', 'Финальный курс', finalCourseData, 'testing')
+    await seedCourse('final', 'Финальный курс', finalCourseData, 'testing', '🎓')
 
   console.log('\n✅ Seed complete!')
 }
