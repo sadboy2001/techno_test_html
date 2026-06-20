@@ -36,10 +36,16 @@ export function CourseApp() {
     const existing = document.getElementById('course-main-js')
     if (existing) existing.remove()
 
-    ;(window as any).__USER_ROLE__ = session?.user?.role || 'user'
-    ;(window as any).__USER_COURSE_ID__ = courseId
+    // Fetch session to ensure role is loaded
+    fetch('/api/auth/session')
+      .then(r => r.json())
+      .then((sess: any) => {
+        const role = sess?.user?.role || 'user'
+        ;(window as any).__USER_ROLE__ = role
+        ;(window as any).__USER_COURSE_ID__ = courseId
 
-    fetch('/api/courses')
+        return fetch('/api/courses')
+      })
       .then(r => r.json())
       .then((courses: CourseInfo[]) => {
         const myCourse = courses.find(c => c.id === courseId)
@@ -82,8 +88,9 @@ export function CourseApp() {
         document.body.appendChild(script)
       })
       .catch(() => {
-        setShowSwitcher(isAdmin)
-        ;(window as any).__SHOW_COURSE_SWITCHER__ = isAdmin
+        const role = (window as any).__USER_ROLE__ || 'user'
+        setShowSwitcher(role === 'admin')
+        ;(window as any).__SHOW_COURSE_SWITCHER__ = role === 'admin'
         ;(window as any).__COURSE_LEVEL_IDS__ = null
         ;(window as any).__COURSE_LEVELS__ = []
 
