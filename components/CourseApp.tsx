@@ -2,12 +2,31 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useSession, signOut } from 'next-auth/react'
+import { usePathname } from 'next/navigation'
 import Link from 'next/link'
+
+type CourseInfo = {
+  id: string
+  title: string
+  description?: string | null
+  icon?: string | null
+  levels?: { id: string; title: string; icon?: string | null; description?: string | null }[] | null
+}
 
 export function CourseApp() {
   const { data: session, status } = useSession()
   const [searchQuery, setSearchQuery] = useState('')
+  const [showSwitcher, setShowSwitcher] = useState(false)
+  const [courseLevels, setCourseLevels] = useState<{ id: string; title: string; icon?: string | null; description?: string | null }[]>([])
+  const [courseTitle, setCourseTitle] = useState('')
   const scriptLoaded = useRef(false)
+  const pathname = usePathname()
+
+  const userCourseId = (session?.user as any)?.courseId
+  const isAdmin = (session?.user as any)?.role === 'admin'
+  // courseId from URL: /{courseId} — first path segment
+  const urlCourseId = pathname && pathname !== '/' ? pathname.split('/')[1] : null
+  const courseId = urlCourseId || userCourseId || 'testing'
 
   useEffect(() => {
     if (status === 'loading') return
@@ -18,12 +37,62 @@ export function CourseApp() {
     if (existing) existing.remove()
 
     ;(window as any).__USER_ROLE__ = session?.user?.role || 'user'
+    ;(window as any).__USER_COURSE_ID__ = courseId
 
-    const script = document.createElement('script')
-    script.id = 'course-main-js'
-    script.src = '/main.js?v=' + Date.now()
-    script.async = false
-    document.body.appendChild(script)
+    fetch('/api/courses')
+      .then(r => r.json())
+      .then((courses: CourseInfo[]) => {
+        const myCourse = courses.find(c => c.id === courseId)
+        const myLevels = myCourse?.levels || []
+        const hasLevels = myLevels.length > 0
+
+        let levelsToShow: { id: string; title: string; icon?: string | null; description?: string | null }[] = []
+
+        if (hasLevels) {
+          levelsToShow = myLevels
+        } else if (isAdmin) {
+          levelsToShow = courses
+            .filter(c => c.levels && c.levels.length > 0)
+            .flatMap(c => [
+              { id: c.id, title: c.title, icon: c.icon },
+              ...(c.levels || []).map(l => ({ id: l.id, title: `${c.title} — ${l.title}`, icon: l.icon })),
+            ])
+          courses.filter(c => !c.levels).forEach(c => {
+            levelsToShow.push({ id: c.id, title: c.title, icon: c.icon })
+          })
+        }
+
+        const show = levelsToShow.length > 0
+
+        setShowSwitcher(show)
+        setCourseLevels(levelsToShow)
+        setCourseTitle(myCourse?.title || (isAdmin && courses.length > 0 ? 'Все курсы' : ''))
+
+        ;(window as any).__SHOW_COURSE_SWITCHER__ = show
+        ;(window as any).__COURSE_LEVEL_IDS__ = hasLevels
+          ? myLevels.map(l => l.id)
+          : null
+        ;(window as any).__COURSE_LEVELS__ = hasLevels ? myLevels : []
+        ;(window as any).__DROPDOWN_ITEMS__ = levelsToShow
+
+        const script = document.createElement('script')
+        script.id = 'course-main-js'
+        script.src = '/main.js?v=' + Date.now()
+        script.async = false
+        document.body.appendChild(script)
+      })
+      .catch(() => {
+        setShowSwitcher(isAdmin)
+        ;(window as any).__SHOW_COURSE_SWITCHER__ = isAdmin
+        ;(window as any).__COURSE_LEVEL_IDS__ = null
+        ;(window as any).__COURSE_LEVELS__ = []
+
+        const script = document.createElement('script')
+        script.id = 'course-main-js'
+        script.src = '/main.js?v=' + Date.now()
+        script.async = false
+        document.body.appendChild(script)
+      })
   }, [status])
 
   const handleToggleDropdown = () => {
@@ -41,39 +110,28 @@ export function CourseApp() {
 
   return (
     <div className="app-root">
-      {/* Course dropdown — rendered outside sidebar so it overlays content */}
+      {/* Course dropdown — dynamic levels */}
+      {showSwitcher && courseLevels.length > 0 && (
       <div className="course-dropdown" id="course-dropdown">
-        <div className="course-dropdown-label">Выберите курс</div>
-        <div className="course-option co-basic active-course" id="co-basic"
-          onClick={() => (window as any).switchCourse?.('basic')}>
-          <div className="course-option-icon">📘</div>
-          <div className="course-option-body">
-            <div className="course-option-title">Базовый курс</div>
-            <div className="course-option-sub">Основы тестирования — с нуля</div>
+        <div className="course-dropdown-label">Выберите уровень</div>
+        {courseLevels.map((level, i) => (
+          <div key={level.id}
+            className={`course-option co-${level.id} ${i === 0 ? '' : 'locked-course'}`}
+            id={`co-${level.id}`}
+            onClick={() => (window as any).switchCourse?.(level.id)}>
+            <div className="course-option-icon">{level.icon || '📄'}</div>
+            <div className="course-option-body">
+              <div className="course-option-title">{level.title}</div>
+              <div className="course-option-sub">{level.description || `Уровень ${i + 1} из ${courseLevels.length}`}</div>
+            </div>
+            <span className={`course-option-badge ${i === 0 ? 'badge-active' : 'badge-new'}`}
+              id={`co-${level.id}-badge`}>
+              {i === 0 ? 'Текущий' : 'Новый'}
+            </span>
           </div>
-          <span className="course-option-badge badge-active" id="co-basic-badge">Текущий</span>
-        </div>
-        <div className="course-option co-advanced locked-course" id="co-advanced"
-          onClick={() => (window as any).switchCourse?.('advanced')}>
-          <div className="course-option-icon">🚀</div>
-          <div className="course-option-body">
-            <div className="course-option-title">Продвинутый курс</div>
-            <div className="course-option-sub">Инструменты и практика</div>
-          </div>
-          <span className="course-option-lock" id="co-advanced-lock">🔒</span>
-          <span className="course-option-badge badge-new" id="co-advanced-badge">Новый</span>
-        </div>
-        <div className="course-option co-final locked-course" id="co-final"
-          onClick={() => (window as any).switchCourse?.('final')}>
-          <div className="course-option-icon">🎓</div>
-          <div className="course-option-body">
-            <div className="course-option-title">Финальный курс</div>
-            <div className="course-option-sub">QA Automation — первый проект</div>
-          </div>
-          <span className="course-option-lock" id="co-final-lock">🔒</span>
-          <span className="course-option-badge badge-final" id="co-final-badge">Новый</span>
-        </div>
+        ))}
       </div>
+      )}
 
       {/* Main layout */}
       <div className="app-container">
@@ -89,18 +147,14 @@ export function CourseApp() {
 
           {/* ── Mobile bottom bar (visible only on mobile) ── */}
           <div className="mobile-bottom-bar" style={{display:'none'}}>
-            {/* Logo dot */}
             <div className="mbb-logo">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--accent-green)">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
                 <path d="M12 6c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm0 10c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z"/>
               </svg>
             </div>
-            {/* Current lesson title */}
             <div className="mbb-title" id="mbb-title">Загрузка...</div>
-            {/* Progress dots preview (current position) */}
             <div className="mbb-dots" id="mbb-dots"/>
-            {/* Menu button — opens drawer */}
             <button className="mbb-menu-btn" id="mbb-menu-btn" title="Меню курса">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
                 <line x1="3" y1="6" x2="21" y2="6"/>
@@ -121,13 +175,15 @@ export function CourseApp() {
             </div>
 
             {/* Course switcher button */}
-            <button className="sidebar-course-btn" id="course-switcher-btn" onClick={handleToggleDropdown} title="Переключить курс">
+            {showSwitcher && (
+            <button className="sidebar-course-btn" id="course-switcher-btn" onClick={handleToggleDropdown} title="Переключить уровень">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
               </svg>
-              <span className="sidebar-course-label" id="sidebar-course-title">Тестирование ПО</span>
+              <span className="sidebar-course-label" id="sidebar-course-title">{courseTitle || 'Курс'}</span>
               <span className="switcher-arrow" id="switcher-arrow">▾</span>
             </button>
+            )}
 
             {/* Search */}
             <div className="sidebar-search">
@@ -196,7 +252,6 @@ export function CourseApp() {
 
         {/* Main content */}
         <main className="main-content">
-          {/* ── Lesson header: title + step dots, centered ── */}
           <div className="steps-bar">
             <div className="step-title" id="step-title">Загрузка...</div>
             <div className="steps-indicators" id="steps-indicators"/>

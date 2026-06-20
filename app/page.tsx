@@ -1,17 +1,14 @@
 // app/page.tsx
-// Redirects to /login if not authenticated, else shows the course app
-
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import { CourseApp } from '@/components/CourseApp'
+import { prisma } from '@/lib/prisma'
 
 export default async function HomePage() {
   const session = await getServerSession(authOptions)
+  if (!session) redirect('/login')
 
-  if (!session) {
-    redirect('/login')
-  }
-
-  return <CourseApp />
+  const user = await prisma.user.findUnique({ where: { id: session.user.id } })
+  const courseId = user?.courseId || 'testing'
+  redirect(`/${courseId}`)
 }

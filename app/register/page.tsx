@@ -1,17 +1,39 @@
 'use client'
 // app/register/page.tsx
 
-import { useState, FormEvent } from 'react'
+import { useState, FormEvent, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+
+type CourseOption = {
+  id: string
+  title: string
+  description?: string | null
+  icon?: string | null
+  levels?: { id: string; title: string }[] | null
+}
 
 export default function RegisterPage() {
   const router = useRouter()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [courseId, setCourseId] = useState('')
+  const [courses, setCourses] = useState<CourseOption[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/courses')
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setCourses(data)
+          if (data.length > 0 && !courseId) setCourseId(data[0].id)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -22,13 +44,18 @@ export default function RegisterPage() {
       return
     }
 
+    if (!courseId) {
+      setError('Выберите курс')
+      return
+    }
+
     setLoading(true)
 
     try {
       const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ name, email, password, courseId }),
       })
 
       const data = await res.json()
@@ -39,7 +66,6 @@ export default function RegisterPage() {
         return
       }
 
-      // Registration successful — redirect to login
       router.push('/login?registered=1')
     } catch {
       setError('Ошибка соединения с сервером')
@@ -108,6 +134,29 @@ export default function RegisterPage() {
               minLength={8}
               autoComplete="new-password"
             />
+          </div>
+
+          <div className="auth-field">
+            <label className="auth-label" htmlFor="course">Курс</label>
+            <select
+              id="course"
+              className="auth-input"
+              value={courseId}
+              onChange={e => setCourseId(e.target.value)}
+              required
+            >
+              {courses.length === 0 && <option value="">Загрузка курсов...</option>}
+              {courses.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.icon || '📘'} {c.title}
+                </option>
+              ))}
+            </select>
+            {courses.find(c => c.id === courseId)?.description && (
+              <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                {courses.find(c => c.id === courseId)?.description}
+              </div>
+            )}
           </div>
 
           <button type="submit" className="auth-btn" disabled={loading}>

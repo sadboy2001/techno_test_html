@@ -11,6 +11,7 @@ const registerSchema = z.object({
     .string()
     .min(8, 'Пароль должен содержать минимум 8 символов')
     .max(100),
+  courseId: z.string().min(1, 'Выберите курс'),
 })
 
 export async function POST(request: Request) {
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const { name, email, password } = parsed.data
+    const { name, email, password, courseId } = parsed.data
 
     // Check for existing user
     const existing = await prisma.user.findUnique({ where: { email } })
@@ -37,12 +38,30 @@ export async function POST(request: Request) {
       )
     }
 
+    // Validate courseId: must be a parent/standalone course (not a child level)
+    if (courseId !== 'testing') {
+      const course = await prisma.course.findUnique({ where: { id: courseId } })
+      if (!course) {
+        return NextResponse.json(
+          { error: 'Выбранный курс не найден' },
+          { status: 400 }
+        )
+      }
+      // Cannot register for a child level directly
+      if (course.parentId) {
+        return NextResponse.json(
+          { error: 'Выберите основной курс, а не уровень' },
+          { status: 400 }
+        )
+      }
+    }
+
     // Hash password (cost factor 12)
     const hashedPassword = await hash(password, 12)
 
     // Create user
     const user = await prisma.user.create({
-      data: { name, email, password: hashedPassword },
+      data: { name, email, password: hashedPassword, courseId },
       select: { id: true, name: true, email: true, createdAt: true },
     })
 

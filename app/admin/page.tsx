@@ -5,8 +5,9 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import AdminUsers from './components/AdminUsers'
 import AdminCourseEditor from './components/AdminCourseEditor'
+import AdminCourses from './components/AdminCourses'
 
-type Tab = 'courses' | 'users'
+type Tab = 'courses' | 'users' | 'manage-courses'
 
 export default function AdminPage() {
   const { data: session, status } = useSession()
@@ -20,10 +21,10 @@ export default function AdminPage() {
       // Verify admin role server-side
       fetch('/api/admin/courses')
         .then(r => {
-          if (r.status === 403 || r.status === 401) router.replace('/')
+          if (r.status === 403 || r.status === 401) router.replace('/testing')
           else setChecking(false)
         })
-        .catch(() => router.replace('/'))
+        .catch(() => router.replace('/testing'))
     }
   }, [status, router])
 
@@ -46,7 +47,8 @@ export default function AdminPage() {
 
         <nav style={{ padding:'8px 8px', flex:1 }}>
           {([
-            { id: 'courses', label: 'Курсы и уроки', icon: '📚' },
+            { id: 'manage-courses', label: 'Курсы', icon: '🎓' },
+            { id: 'courses', label: 'Контент курсов', icon: '📚' },
             { id: 'users',   label: 'Пользователи',  icon: '👥' },
           ] as {id:Tab, label:string, icon:string}[]).map(item => (
             <button key={item.id} onClick={() => setTab(item.id)} style={{
@@ -70,6 +72,7 @@ export default function AdminPage() {
 
       {/* Main */}
       <main style={{ flex:1, overflow:'auto' }}>
+        {tab === 'manage-courses' && <AdminCourses />}
         {tab === 'courses' && <AdminCourseEditor />}
         {tab === 'users'   && <AdminUsers />}
       </main>

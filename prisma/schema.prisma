@@ -15,6 +15,7 @@ model User {
   email     String   @unique
   password  String
   role      String   @default("user") // "user" | "admin"
+  courseId  String?  // selected course at registration
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -35,10 +36,13 @@ model UserProgress {
 }
 
 model Course {
-  id        String   @id  // "basic" | "advanced" | "final"
-  title     String
-  order     Int      @default(0)
-  chapters  Chapter[]
+  id          String   @id
+  title       String
+  description String?
+  icon        String?
+  order       Int      @default(0)
+  parentId    String?  // null = parent course or standalone; set = level of parent
+  chapters    Chapter[]
 }
 
 model Chapter {

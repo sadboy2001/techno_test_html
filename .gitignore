@@ -26,3 +26,5 @@ prisma/*.db
 *.pem
 .vercel
 npm-debug.log*
+docker-compose.yml
+tsconfig.tsbuildinfo

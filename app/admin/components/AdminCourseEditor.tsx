@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import ConfirmModal from './ConfirmModal'
 
 type Step = {
   id: string; order: number; type: string; title: string
@@ -10,7 +11,7 @@ type Step = {
 }
 type Lesson = { id: string; title: string; order: number; steps: Step[] }
 type Chapter = { id: string; title: string; order: number; lessons: Lesson[] }
-type Course = { id: string; title: string; order: number; chapters: Chapter[] }
+type Course = { id: string; title: string; order: number; parentId?: string | null; icon?: string | null; description?: string | null; chapters: Chapter[] }
 
 const S = {
   btn: (variant: 'primary' | 'ghost' | 'danger' = 'ghost') => ({
@@ -68,12 +69,6 @@ function StepPreview({ step, onClose }: { step: Step; onClose: () => void }) {
                 </div>
               ))}
             </div>
-            {step.explanation && (
-              <div style={{ marginTop: 20, padding: '12px 16px', background: '#161616', borderRadius: 8, border: '1px solid #2a2a2a' }}>
-                <div style={{ fontSize: 11, color: '#555', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Подсказка</div>
-                <div style={{ color: '#888', fontSize: 13 }}>{step.explanation}</div>
-              </div>
-            )}
           </>
         )}
       </div>
@@ -224,7 +219,7 @@ function StepEditor({ step, onSave, onDelete, onClose }: {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 24, paddingTop: 20, borderTop: '1px solid #2a2a2a' }}>
-            <button onClick={() => { if (confirm('Удалить шаг?')) onDelete() }} style={S.btn('danger')}>
+            <button onClick={onDelete} style={S.btn('danger')}>
               🗑 Удалить шаг
             </button>
             <div style={{ display: 'flex', gap: 10 }}>
@@ -338,7 +333,7 @@ function AddLessonModal({ chapterId, onAdd, onClose }: { chapterId: string; onAd
 export default function AdminCourseEditor() {
   const [courses, setCourses] = useState<Course[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeCourse, setActiveCourse] = useState<string>('basic')
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null)
   const [activeLesson, setActiveLesson] = useState<Lesson | null>(null)
   const [editStep, setEditStep] = useState<Step | null>(null)
   const [previewStep, setPreviewStep] = useState<Step | null>(null)
@@ -347,6 +342,10 @@ export default function AdminCourseEditor() {
   const [audioMap, setAudioMap] = useState<Record<string, string>>({})
   const [audioDragOver, setAudioDragOver] = useState<string | false>(false)
   const [audioUploading, setAudioUploading] = useState<string | false>(false)
+  const [confirmModal, setConfirmModal] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null)
+  const [editingLevel, setEditingLevel] = useState<string | null>(null)
+  const [levelEditTitle, setLevelEditTitle] = useState('')
+  const [levelEditDesc, setLevelEditDesc] = useState('')
 
   const loadAudioMap = useCallback(() => {
     fetch('/api/admin/audio').then(r => r.json()).then(data => {
@@ -364,15 +363,45 @@ export default function AdminCourseEditor() {
 
   useEffect(() => { load(); loadAudioMap() }, [load, loadAudioMap])
 
-  const course = courses.find(c => c.id === activeCourse)
+  // Filter: parent courses and their children
+  const parentCourses = courses.filter(c => !c.parentId)
+  const childCourses = courses.filter(c => c.parentId)
+
+  // When a parent is selected, show its levels as tabs
+  const activeParent = parentCourses.find(c => c.id === selectedCourseId)
+  const isParentSelected = !!activeParent
+  const activeLevels = isParentSelected ? childCourses.filter(c => c.parentId === selectedCourseId) : []
+  const singleCourse = !isParentSelected ? courses.find(c => c.id === selectedCourseId) : null
+
+  // For parent courses: which level tab is active
+  const [activeLevelId, setActiveLevelId] = useState<string | null>(null)
+  const [editingChapterId, setEditingChapterId] = useState<string | null>(null)
+  const [editingChapterTitle, setEditingChapterTitle] = useState('')
+  const [addingChapter, setAddingChapter] = useState(false)
+  const [newChapterTitle, setNewChapterTitle] = useState('')
+  const activeLevel = activeLevels.find(c => c.id === activeLevelId)
+
+  // The actual course being edited
+  const editedCourse = isParentSelected ? activeLevel : singleCourse
 
   useEffect(() => {
-    if (!activeLesson || !course) return
-    for (const ch of course.chapters) {
+    if (isParentSelected && activeLevels.length > 0 && !activeLevelId) {
+      setActiveLevelId(activeLevels[0].id)
+    }
+  }, [selectedCourseId, activeLevels])
+
+  // Reset lesson when course changes
+  useEffect(() => {
+    setActiveLesson(null)
+  }, [selectedCourseId, activeLevelId])
+
+  useEffect(() => {
+    if (!activeLesson || !editedCourse) return
+    for (const ch of editedCourse.chapters) {
       const l = ch.lessons.find(l => l.id === activeLesson.id)
       if (l) { setActiveLesson(l); return }
     }
-  }, [courses])
+  }, [courses, activeLevelId, selectedCourseId])
 
   const uploadAudio = async (file: File, lessonId: string, stepIndex: number) => {
     const stepKey = `${lessonId}_${stepIndex}`
@@ -403,235 +432,475 @@ export default function AdminCourseEditor() {
   }
 
   const deleteLesson = async (lessonId: string) => {
-    if (!confirm('Удалить урок и все его шаги?')) return
-    await fetch(`/api/admin/lessons/${lessonId}`, { method: 'DELETE' })
-    if (activeLesson?.id === lessonId) setActiveLesson(null)
-    load()
+    setConfirmModal({
+      title: 'Удалить урок?',
+      message: 'Удалить урок и все его шаги? Это действие необратимо.',
+      onConfirm: async () => {
+        await fetch(`/api/admin/lessons/${lessonId}`, { method: 'DELETE' })
+        if (activeLesson?.id === lessonId) setActiveLesson(null)
+        setConfirmModal(null)
+        load()
+      },
+    })
   }
 
   const reorderStep = async (stepId: string, direction: 'up' | 'down') => {
-  await fetch('/api/admin/steps/reorder', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stepId, direction }),
-  })
-  load()
-}
+    await fetch('/api/admin/steps/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stepId, direction }),
+    })
+    load()
+  }
 
   const stepIcon = (type: string) => type === 'quiz' ? '❓' : type === 'practice' ? '🔧' : '📖'
 
+  const goBack = () => {
+    setSelectedCourseId(null)
+    setActiveLesson(null)
+    setActiveLevelId(null)
+  }
+
   if (loading) return <div style={{ padding: 40, color: '#666' }}>Загрузка курсов...</div>
 
-  if (courses.length === 0) {
+  // ── Step 1: Course selection ───────────────────────────────────────
+  if (!selectedCourseId) {
+    if (courses.length === 0) {
+      return (
+        <div style={{ padding: 40 }}>
+          <div style={{ background: '#161616', border: '1px solid #2a2a2a', borderRadius: 12, padding: 32, maxWidth: 520 }}>
+            <h2 style={{ color: '#fff', marginBottom: 12 }}>База данных пуста</h2>
+            <p style={{ color: '#888', fontSize: 14, lineHeight: 1.6, marginBottom: 20 }}>
+              Контент курса ещё не импортирован из main.js в базу данных.<br />
+              Выполни команду локально:
+            </p>
+            <pre style={{ background: '#0f0f0f', padding: '12px 16px', borderRadius: 8, fontSize: 13, color: '#62a54b', overflow: 'auto' }}>
+              {`npm install\nnode prisma/seed.mjs`}
+            </pre>
+            <p style={{ color: '#555', fontSize: 12, marginTop: 12 }}>После этого обнови страницу.</p>
+          </div>
+        </div>
+      )
+    }
+
     return (
-      <div style={{ padding: 40 }}>
-        <div style={{ background: '#161616', border: '1px solid #2a2a2a', borderRadius: 12, padding: 32, maxWidth: 520 }}>
-          <h2 style={{ color: '#fff', marginBottom: 12 }}>База данных пуста</h2>
-          <p style={{ color: '#888', fontSize: 14, lineHeight: 1.6, marginBottom: 20 }}>
-            Контент курса ещё не импортирован из main.js в базу данных.<br />
-            Выполни команду локально:
-          </p>
-          <pre style={{ background: '#0f0f0f', padding: '12px 16px', borderRadius: 8, fontSize: 13, color: '#62a54b', overflow: 'auto' }}>
-            {`npm install\nnode prisma/seed.mjs`}
-          </pre>
-          <p style={{ color: '#555', fontSize: 12, marginTop: 12 }}>После этого обнови страницу.</p>
+      <div style={{ padding: 32 }}>
+        <div style={{ marginBottom: 24 }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: 0 }}>Выберите курс</h2>
+          <p style={{ color: '#555', fontSize: 13, marginTop: 4 }}>Выберите курс для редактирования контента</p>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+          {parentCourses.map(course => {
+            const levels = childCourses.filter(c => c.parentId === course.id)
+            const totalLessons = (levels.length > 0 ? levels : [course]).reduce((s, c) => s + c.chapters.reduce((ch, l) => ch + l.lessons.length, 0), 0)
+            const totalSteps = (levels.length > 0 ? levels : [course]).reduce((s, c) => s + c.chapters.reduce((ch, l) => ch + l.lessons.reduce((le, st) => le + st.steps.length, 0), 0), 0)
+
+            return (
+              <button key={course.id} onClick={() => setSelectedCourseId(course.id)} style={{
+                background: '#161616', border: '1px solid #2a2a2a', borderRadius: 10, padding: '18px 20px',
+                textAlign: 'left', cursor: 'pointer', transition: 'border-color 0.15s',
+              }}
+                onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = '#62a54b'}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = '#2a2a2a'}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+                  <span style={{ fontSize: 28 }}>{course.icon || '📘'}</span>
+                  <div>
+                    <div style={{ color: '#e0e0e0', fontSize: 15, fontWeight: 600 }}>{course.title}</div>
+                    {course.description && <div style={{ color: '#555', fontSize: 12, marginTop: 2 }}>{course.description}</div>}
+                  </div>
+                </div>
+                <div style={{ color: '#444', fontSize: 11 }}>
+                  {levels.length > 0 ? (
+                    <>{levels.length} уровней · </>
+                  ) : null}
+                  {totalLessons} уроков · {totalSteps} шагов
+                </div>
+              </button>
+            )
+          })}
         </div>
       </div>
     )
   }
 
+  // ── Step 2: Course editor ──────────────────────────────────────────
   return (
-    <div style={{ display: 'flex', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-      {/* Course/Lesson tree */}
-      <div style={{ width: 280, borderRight: '1px solid #1e1e1e', overflow: 'auto', flexShrink: 0 }}>
-        <div style={{ display: 'flex', borderBottom: '1px solid #1e1e1e' }}>
-          {courses.map(c => (
-            <button key={c.id} onClick={() => { setActiveCourse(c.id); setActiveLesson(null) }} style={{
-              flex: 1, padding: '10px 6px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600,
-              background: activeCourse === c.id ? '#1e3a1e' : 'transparent',
-              color: activeCourse === c.id ? '#62a54b' : '#666',
-              borderBottom: activeCourse === c.id ? '2px solid #62a54b' : '2px solid transparent',
-            }}>
-              {c.id === 'basic' ? 'Базовый' : c.id === 'advanced' ? 'Продвинутый' : 'Финальный'}
-            </button>
-          ))}
-        </div>
+      {/* Back button + level tabs */}
+      <div style={{ borderBottom: '1px solid #1e1e1e', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+        <button onClick={goBack} style={{
+          padding: '10px 16px', background: 'transparent', border: 'none', color: '#62a54b',
+          cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6,
+          borderRight: '1px solid #1e1e1e',
+        }}>
+          ← Назад к курсам
+        </button>
 
-        <div style={{ padding: '8px 0' }}>
-          {course?.chapters.map(ch => (
-            <div key={ch.id}>
-              <div style={{ padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 11, color: '#555', fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.06em' }}>
-                  {ch.title}
-                </span>
-                <button onClick={() => setAddingLesson(ch.id)} style={{
-                  background: 'transparent', border: 'none', color: '#555', cursor: 'pointer',
-                  fontSize: 18, lineHeight: 1, padding: '0 4px', borderRadius: 4,
-                }} title="Добавить урок">+</button>
-              </div>
-              {ch.lessons.map(lesson => (
-                <div key={lesson.id} style={{
-                  display: 'flex', alignItems: 'center',
-                  background: activeLesson?.id === lesson.id ? '#1a2a1a' : 'transparent',
-                  borderLeft: activeLesson?.id === lesson.id ? '2px solid #62a54b' : '2px solid transparent',
-                }}>
-                  <button onClick={() => setActiveLesson(lesson)} style={{
-                    flex: 1, textAlign: 'left', padding: '8px 8px 8px 20px',
-                    background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 13,
-                    color: activeLesson?.id === lesson.id ? '#62a54b' : '#bbb',
-                  }}>
-                    {lesson.title}
-                    <span style={{ marginLeft: 6, fontSize: 10, color: '#555' }}>({lesson.steps.length})</span>
-                  </button>
-                  <button onClick={() => deleteLesson(lesson.id)} style={{
+        {activeLevels.length > 0 && (
+          <div style={{ display: 'flex', flex: 1, alignItems: 'center' }}>
+            {activeLevels.map(level => (
+              editingLevel === level.id ? (
+                <div key={level.id} style={{ flex: 1, padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4, borderLeft: '1px solid #1e1e1e' }}>
+                  <input
+                    style={{ ...S.input, fontSize: 11, padding: '4px 6px' }}
+                    value={levelEditTitle}
+                    onChange={e => setLevelEditTitle(e.target.value)}
+                    placeholder="Название уровня"
+                    autoFocus
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter') {
+                        await fetch(`/api/admin/courses/${level.id}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ title: levelEditTitle.trim() || level.title, description: levelEditDesc.trim() || null }),
+                        })
+                        setEditingLevel(null)
+                        load()
+                      }
+                      if (e.key === 'Escape') setEditingLevel(null)
+                    }}
+                  />
+                  <input
+                    style={{ ...S.input, fontSize: 10, padding: '3px 6px', color: '#888' }}
+                    value={levelEditDesc}
+                    onChange={e => setLevelEditDesc(e.target.value)}
+                    placeholder="Описание уровня"
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter') {
+                        await fetch(`/api/admin/courses/${level.id}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ title: levelEditTitle.trim() || level.title, description: levelEditDesc.trim() || null }),
+                        })
+                        setEditingLevel(null)
+                        load()
+                      }
+                      if (e.key === 'Escape') setEditingLevel(null)
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button onClick={async () => {
+                      await fetch(`/api/admin/courses/${level.id}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: levelEditTitle.trim() || level.title, description: levelEditDesc.trim() || null }),
+                      })
+                      setEditingLevel(null)
+                      load()
+                    }} style={{ ...S.btn('primary'), padding: '3px 8px', fontSize: 10 }}>✓</button>
+                    <button onClick={() => setEditingLevel(null)} style={{ ...S.btn(), padding: '3px 8px', fontSize: 10 }}>✕</button>
+                  </div>
+                </div>
+              ) : (
+                <button key={level.id} onClick={() => { setActiveLevelId(level.id); setActiveLesson(null) }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    setEditingLevel(level.id)
+                    setLevelEditTitle(level.title)
+                    setLevelEditDesc((level as any).description || '')
+                  }}
+                  style={{
+                    flex: 1, padding: '10px 6px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600,
+                    background: activeLevelId === level.id ? '#1e3a1e' : 'transparent',
+                    color: activeLevelId === level.id ? '#62a54b' : '#666',
+                    borderBottom: activeLevelId === level.id ? '2px solid #62a54b' : '2px solid transparent',
+                  }}
+                  title="Двойной клик — редактировать название и описание"
+                >
+                  {level.title}
+                  {(level as any).description && (
+                    <div style={{ fontSize: 9, fontWeight: 400, color: '#555', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {(level as any).description}
+                    </div>
+                  )}
+                </button>
+              )
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Editor body */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Lesson tree */}
+        <div style={{ width: 280, borderRight: '1px solid #1e1e1e', overflow: 'auto', flexShrink: 0 }}>
+          <div style={{ padding: '8px 0' }}>
+            {editedCourse?.chapters.map(ch => (
+              <div key={ch.id}>
+                <div style={{ padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
+                  {editingChapterId === ch.id ? (
+                    <input
+                      style={{ ...S.input, fontSize: 11, padding: '4px 8px', flex: 1, textTransform: 'uppercase', letterSpacing: '0.06em' }}
+                      value={editingChapterTitle}
+                      onChange={e => setEditingChapterTitle(e.target.value)}
+                      onKeyDown={async (e) => {
+                        if (e.key === 'Enter' && editingChapterTitle.trim()) {
+                          await fetch(`/api/admin/chapters/${ch.id}`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ title: editingChapterTitle.trim() }),
+                          })
+                          setEditingChapterId(null)
+                          load()
+                        }
+                        if (e.key === 'Escape') setEditingChapterId(null)
+                      }}
+                      onBlur={async () => {
+                        if (editingChapterTitle.trim() && editingChapterTitle !== ch.title) {
+                          await fetch(`/api/admin/chapters/${ch.id}`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ title: editingChapterTitle.trim() }),
+                          })
+                          load()
+                        }
+                        setEditingChapterId(null)
+                      }}
+                      autoFocus
+                    />
+                  ) : (
+                    <span
+                      style={{ fontSize: 11, color: '#555', fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.06em', cursor: 'pointer', flex: 1 }}
+                      onClick={() => { setEditingChapterId(ch.id); setEditingChapterTitle(ch.title) }}
+                      title="Нажмите чтобы переименовать"
+                    >
+                      {ch.title}
+                    </span>
+                  )}
+                  <button onClick={() => setAddingLesson(ch.id)} style={{
+                    background: 'transparent', border: 'none', color: '#555', cursor: 'pointer',
+                    fontSize: 18, lineHeight: 1, padding: '0 4px', borderRadius: 4,
+                  }} title="Добавить урок">+</button>
+                  <button onClick={async () => {
+                    setConfirmModal({
+                      title: 'Удалить главу?',
+                      message: `Удалить главу "${ch.title}" и все её уроки? Это действие необратимо.`,
+                      onConfirm: async () => {
+                        await fetch(`/api/admin/chapters/${ch.id}`, { method: 'DELETE' })
+                        setConfirmModal(null)
+                        load()
+                      },
+                    })
+                  }} style={{
                     background: 'transparent', border: 'none', color: '#3a1a1a', cursor: 'pointer',
-                    fontSize: 13, padding: '4px 8px', flexShrink: 0, borderRadius: 4, transition: 'color 0.15s',
+                    fontSize: 13, padding: '2px 4px', lineHeight: 1, borderRadius: 4, transition: 'color 0.15s',
                   }}
                     onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#f87171'}
                     onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#3a1a1a'}
-                    title="Удалить урок">🗑</button>
+                    title="Удалить главу">🗑</button>
                 </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Step list */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 28 }}>
-        {!activeLesson ? (
-          <div style={{ color: '#555', paddingTop: 60, textAlign: 'center', fontSize: 14 }}>
-            Выбери урок слева
-          </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
-              <div>
-                <h2 style={{ fontSize: 18, fontWeight: 700, color: '#fff', margin: 0 }}>{activeLesson.title}</h2>
-                <p style={{ color: '#555', fontSize: 13, marginTop: 4 }}>{activeLesson.steps.length} шагов</p>
-              </div>
-              <button onClick={() => setAddingStep(true)} style={S.btn('primary')}>
-                + Добавить шаг
-              </button>
-            </div>
-
-            {/* Audio upload panel */}
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {activeLesson.steps.map((step, i) => {
-                const stepKey = `${activeLesson.id}_${i}`
-                const hasAudio = !!audioMap[stepKey]
-                const isDragOver = audioDragOver === stepKey
-
-                return (
-                <div key={step.id} style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-                  <div style={{
-                    background: '#161616', border: '1px solid #222', borderRadius: hasAudio ? '10px 10px 0 0' : 10, padding: '12px 16px',
-                    display: 'flex', alignItems: 'center', gap: 12, transition: 'border-color 0.15s',
-                  }}
-                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = '#3a3a3a'}
-                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = '#222'}
-                  >
-                  <span style={{ color: '#666', fontSize: 11, width: 20, textAlign: 'center', flexShrink: 0 }}>{i + 1}</span>
-                  <span style={{ fontSize: 16, flexShrink: 0 }}>{stepIcon(step.type)}</span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ color: '#e0e0e0', fontSize: 13, fontWeight: 500 }}>{step.title}</div>
-                    {step.type === 'quiz' && step.question && (
-                      <div style={{ color: '#555', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 400 }}>
-                        {step.question}
-                      </div>
-                    )}
-                  </div>
-                  <span style={{
-                    fontSize: 11, padding: '2px 8px', borderRadius: 12,
-                    background: step.type === 'quiz' ? '#1a1a2e' : step.type === 'practice' ? '#1a2a1a' : '#1e1e1e',
-                    color: step.type === 'quiz' ? '#667eea' : step.type === 'practice' ? '#62a54b' : '#666',
+                {ch.lessons.map(lesson => (
+                  <div key={lesson.id} style={{
+                    display: 'flex', alignItems: 'center',
+                    background: activeLesson?.id === lesson.id ? '#1a2a1a' : 'transparent',
+                    borderLeft: activeLesson?.id === lesson.id ? '2px solid #62a54b' : '2px solid transparent',
                   }}>
-                    {step.type}
-                  </span>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <button onClick={() => reorderStep(step.id, 'up')} disabled={i === 0} style={{
-                      background: 'transparent', border: '1px solid #2a2a2a', borderRadius: 4,
-                      color: i === 0 ? '#333' : '#666', cursor: i === 0 ? 'default' : 'pointer',
-                      fontSize: 10, padding: '2px 6px', lineHeight: 1,
-                    }}>▲</button>
-                    <button onClick={() => reorderStep(step.id, 'down')} disabled={i === activeLesson.steps.length - 1} style={{
-                      background: 'transparent', border: '1px solid #2a2a2a', borderRadius: 4,
-                      color: i === activeLesson.steps.length - 1 ? '#333' : '#666', cursor: i === activeLesson.steps.length - 1 ? 'default' : 'pointer',
-                      fontSize: 10, padding: '2px 6px', lineHeight: 1,
-                    }}>▼</button>
+                    <button onClick={() => setActiveLesson(lesson)} style={{
+                      flex: 1, textAlign: 'left', padding: '8px 8px 8px 20px',
+                      background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 13,
+                      color: activeLesson?.id === lesson.id ? '#62a54b' : '#bbb',
+                    }}>
+                      {lesson.title}
+                      <span style={{ marginLeft: 6, fontSize: 10, color: '#555' }}>({lesson.steps.length})</span>
+                    </button>
+                    <button onClick={() => deleteLesson(lesson.id)} style={{
+                      background: 'transparent', border: 'none', color: '#3a1a1a', cursor: 'pointer',
+                      fontSize: 13, padding: '4px 8px', flexShrink: 0, borderRadius: 4, transition: 'color 0.15s',
+                    }}
+                      onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#f87171'}
+                      onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#3a1a1a'}
+                      title="Удалить урок">🗑</button>
                   </div>
-                  <button onClick={() => setPreviewStep(step)} style={{
-                    background: 'transparent', border: '1px solid #2a2a2a', borderRadius: 6,
-                    color: '#666', cursor: 'pointer', fontSize: 12, padding: '4px 8px',
-                  }} title="Предпросмотр">👁</button>
-                  {step.type !== 'practice' && (
-                    <button onClick={() => setEditStep(step)} style={{
+                ))}
+              </div>
+            ))}
+          </div>
+
+          {/* Add chapter button */}
+          <div style={{ padding: '8px 14px' }}>
+            {addingChapter ? (
+              <div style={{ display: 'flex', gap: 4 }}>
+                <input
+                  style={{ ...S.input, fontSize: 12, padding: '6px 8px', flex: 1 }}
+                  value={newChapterTitle}
+                  onChange={e => setNewChapterTitle(e.target.value)}
+                  placeholder="Название главы"
+                  autoFocus
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter' && newChapterTitle.trim() && editedCourse) {
+                      await fetch('/api/admin/chapters', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ courseId: editedCourse.id, title: newChapterTitle.trim() }),
+                      })
+                      setAddingChapter(false)
+                      setNewChapterTitle('')
+                      load()
+                    }
+                    if (e.key === 'Escape') { setAddingChapter(false); setNewChapterTitle('') }
+                  }}
+                />
+                <button onClick={async () => {
+                  if (newChapterTitle.trim() && editedCourse) {
+                    await fetch('/api/admin/chapters', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ courseId: editedCourse.id, title: newChapterTitle.trim() }),
+                    })
+                    setAddingChapter(false)
+                    setNewChapterTitle('')
+                    load()
+                  }
+                }} style={{ ...S.btn('primary'), padding: '6px 10px', fontSize: 12 }}>✓</button>
+                <button onClick={() => { setAddingChapter(false); setNewChapterTitle('') }} style={{ ...S.btn(), padding: '6px 10px', fontSize: 12 }}>✕</button>
+              </div>
+            ) : (
+              <button onClick={() => setAddingChapter(true)} style={{
+                width: '100%', padding: '8px', background: 'transparent', border: '1px dashed #2a2a2a',
+                borderRadius: 6, color: '#555', cursor: 'pointer', fontSize: 12, textAlign: 'center',
+              }}>
+                + Добавить главу
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Step list */}
+        <div style={{ flex: 1, overflow: 'auto', padding: 28 }}>
+          {!activeLesson ? (
+            <div style={{ color: '#555', paddingTop: 60, textAlign: 'center', fontSize: 14 }}>
+              Выбери урок слева
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ fontSize: 18, fontWeight: 700, color: '#fff', margin: 0 }}>{activeLesson.title}</h2>
+                  <p style={{ color: '#555', fontSize: 13, marginTop: 4 }}>{activeLesson.steps.length} шагов</p>
+                </div>
+                <button onClick={() => setAddingStep(true)} style={S.btn('primary')}>
+                  + Добавить шаг
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {activeLesson.steps.map((step, i) => {
+                  const stepKey = `${activeLesson.id}_${i}`
+                  const hasAudio = !!audioMap[stepKey]
+                  const isDragOver = audioDragOver === stepKey
+
+                  return (
+                  <div key={step.id} style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                    <div style={{
+                      background: '#161616', border: '1px solid #222', borderRadius: hasAudio ? '10px 10px 0 0' : 10, padding: '12px 16px',
+                      display: 'flex', alignItems: 'center', gap: 12, transition: 'border-color 0.15s',
+                    }}
+                      onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = '#3a3a3a'}
+                      onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = '#222'}
+                    >
+                    <span style={{ color: '#666', fontSize: 11, width: 20, textAlign: 'center', flexShrink: 0 }}>{i + 1}</span>
+                    <span style={{ fontSize: 16, flexShrink: 0 }}>{stepIcon(step.type)}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ color: '#e0e0e0', fontSize: 13, fontWeight: 500 }}>{step.title}</div>
+                      {step.type === 'quiz' && step.question && (
+                        <div style={{ color: '#555', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 400 }}>
+                          {step.question}
+                        </div>
+                      )}
+                    </div>
+                    <span style={{
+                      fontSize: 11, padding: '2px 8px', borderRadius: 12,
+                      background: step.type === 'quiz' ? '#1a1a2e' : step.type === 'practice' ? '#1a2a1a' : '#1e1e1e',
+                      color: step.type === 'quiz' ? '#667eea' : step.type === 'practice' ? '#62a54b' : '#666',
+                    }}>
+                      {step.type}
+                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <button onClick={() => reorderStep(step.id, 'up')} disabled={i === 0} style={{
+                        background: 'transparent', border: '1px solid #2a2a2a', borderRadius: 4,
+                        color: i === 0 ? '#333' : '#666', cursor: i === 0 ? 'default' : 'pointer',
+                        fontSize: 10, padding: '2px 6px', lineHeight: 1,
+                      }}>▲</button>
+                      <button onClick={() => reorderStep(step.id, 'down')} disabled={i === activeLesson.steps.length - 1} style={{
+                        background: 'transparent', border: '1px solid #2a2a2a', borderRadius: 4,
+                        color: i === activeLesson.steps.length - 1 ? '#333' : '#666', cursor: i === activeLesson.steps.length - 1 ? 'default' : 'pointer',
+                        fontSize: 10, padding: '2px 6px', lineHeight: 1,
+                      }}>▼</button>
+                    </div>
+                    <button onClick={() => setPreviewStep(step)} style={{
                       background: 'transparent', border: '1px solid #2a2a2a', borderRadius: 6,
                       color: '#666', cursor: 'pointer', fontSize: 12, padding: '4px 8px',
-                    }} title="Редактировать">✏️</button>
-                  )}
-                  </div>
-
-                  {/* Per-step audio zone */}
-                  <div
-                    onDragOver={e => { e.preventDefault(); setAudioDragOver(stepKey) }}
-                    onDragLeave={() => setAudioDragOver(false)}
-                    onDrop={e => {
-                      e.preventDefault()
-                      const file = e.dataTransfer.files[0]
-                      if (file) uploadAudio(file, activeLesson.id, i)
-                    }}
-                    onClick={() => {
-                      const input = document.createElement('input')
-                      input.type = 'file'
-                      input.accept = 'audio/mp3,audio/mpeg,audio/m4a,audio/x-m4a,audio/mp4,audio/wav,audio/ogg,.mp3,.m4a,.wav,.ogg'
-                      input.onchange = (e: any) => {
-                        const file = e.target.files[0]
-                        if (file) uploadAudio(file, activeLesson.id, i)
-                      }
-                      input.click()
-                    }}
-                    style={{
-                      borderRadius: '0 0 10px 10px',
-                      border: isDragOver ? '1px dashed #62a54b' : '1px dashed #1e1e1e',
-                      borderTop: 'none',
-                      background: isDragOver ? '#0d1f0d' : hasAudio ? '#0f1a0f' : '#111',
-                      padding: '7px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    <span style={{ fontSize: 13 }}>🔊</span>
-                    {audioUploading === stepKey ? (
-                      <span style={{ color: '#62a54b', fontSize: 11 }}>Загрузка...</span>
-                    ) : hasAudio ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
-                        <span style={{ color: '#62a54b', fontSize: 11, fontWeight: 600 }}>✓ {audioMap[stepKey]}</span>
-                        <audio controls src={`/audio/${audioMap[stepKey]}`}
-                          style={{ height: 22, flex: 1 }}
-                          onClick={e => e.stopPropagation()} />
-                        <button
-                          onClick={e => { e.stopPropagation(); removeAudio(activeLesson.id, i) }}
-                          style={{ ...S.btn('danger'), padding: '2px 7px', fontSize: 10, flexShrink: 0 }}
-                        >Удалить</button>
-                      </div>
-                    ) : (
-                      <span style={{ color: isDragOver ? '#62a54b' : '#3a3a3a', fontSize: 11 }}>
-                        {isDragOver ? 'Отпусти для загрузки' : 'Перетащи аудио (mp3, m4a) или нажми'}
-                      </span>
+                    }} title="Предпросмотр">👁</button>
+                    {step.type !== 'practice' && (
+                      <button onClick={() => setEditStep(step)} style={{
+                        background: 'transparent', border: '1px solid #2a2a2a', borderRadius: 6,
+                        color: '#666', cursor: 'pointer', fontSize: 12, padding: '4px 8px',
+                      }} title="Редактировать">✏️</button>
                     )}
+                    </div>
+
+                    {/* Per-step audio zone */}
+                    <div
+                      onDragOver={e => { e.preventDefault(); setAudioDragOver(stepKey) }}
+                      onDragLeave={() => setAudioDragOver(false)}
+                      onDrop={e => {
+                        e.preventDefault()
+                        const file = e.dataTransfer.files[0]
+                        if (file) uploadAudio(file, activeLesson.id, i)
+                      }}
+                      onClick={() => {
+                        const input = document.createElement('input')
+                        input.type = 'file'
+                        input.accept = 'audio/mp3,audio/mpeg,audio/m4a,audio/x-m4a,audio/mp4,audio/wav,audio/ogg,.mp3,.m4a,.wav,.ogg'
+                        input.onchange = (e: any) => {
+                          const file = e.target.files[0]
+                          if (file) uploadAudio(file, activeLesson.id, i)
+                        }
+                        input.click()
+                      }}
+                      style={{
+                        borderRadius: '0 0 10px 10px',
+                        border: isDragOver ? '1px dashed #62a54b' : '1px dashed #1e1e1e',
+                        borderTop: 'none',
+                        background: isDragOver ? '#0d1f0d' : hasAudio ? '#0f1a0f' : '#111',
+                        padding: '7px 16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      <span style={{ fontSize: 13 }}>🔊</span>
+                      {audioUploading === stepKey ? (
+                        <span style={{ color: '#62a54b', fontSize: 11 }}>Загрузка...</span>
+                      ) : hasAudio ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+                          <span style={{ color: '#62a54b', fontSize: 11, fontWeight: 600 }}>✓ {audioMap[stepKey]}</span>
+                          <audio controls src={`/audio/${audioMap[stepKey]}`}
+                            style={{ height: 22, flex: 1 }}
+                            onClick={e => e.stopPropagation()} />
+                          <button
+                            onClick={e => { e.stopPropagation(); removeAudio(activeLesson.id, i) }}
+                            style={{ ...S.btn('danger'), padding: '2px 7px', fontSize: 10, flexShrink: 0 }}
+                          >Удалить</button>
+                        </div>
+                      ) : (
+                        <span style={{ color: isDragOver ? '#62a54b' : '#3a3a3a', fontSize: 11 }}>
+                          {isDragOver ? 'Отпусти для загрузки' : 'Перетащи аудио (mp3, m4a) или нажми'}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-                )
-              })}
-            </div>
-          </>
-        )}
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {previewStep && (
@@ -642,7 +911,11 @@ export default function AdminCourseEditor() {
         <StepEditor
           step={editStep}
           onSave={() => { setEditStep(null); load() }}
-          onDelete={() => deleteStep(editStep.id)}
+          onDelete={() => setConfirmModal({
+            title: 'Удалить шаг?',
+            message: 'Удалить этот шаг? Это действие необратимо.',
+            onConfirm: () => { deleteStep(editStep.id); setConfirmModal(null) },
+          })}
           onClose={() => setEditStep(null)}
         />
       )}
@@ -660,6 +933,17 @@ export default function AdminCourseEditor() {
           chapterId={addingLesson}
           onAdd={load}
           onClose={() => setAddingLesson(null)}
+        />
+      )}
+
+      {confirmModal && (
+        <ConfirmModal
+          title={confirmModal.title}
+          message={confirmModal.message}
+          confirmLabel="Удалить"
+          danger
+          onConfirm={confirmModal.onConfirm}
+          onClose={() => setConfirmModal(null)}
         />
       )}
     </div>

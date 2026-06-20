@@ -3283,7 +3283,17 @@ browser.quit()</pre>
         // ═══════════════════════════════════════════════
         //  MULTI-COURSE SYSTEM
         // ═══════════════════════════════════════════════
-        let activeCourse = 'basic';  // 'basic' | 'advanced' | 'final'
+        const userCourseId = window.__USER_COURSE_ID__ || 'basic';
+        const courseLevelIds = window.__COURSE_LEVEL_IDS__;
+        let activeCourse;
+
+        if (userCourseId === 'testing') {
+            activeCourse = 'basic';
+        } else if (courseLevelIds && courseLevelIds.length > 0) {
+            activeCourse = courseLevelIds[0];
+        } else {
+            activeCourse = userCourseId;
+        }
 
         // Advanced course data (populated as lessons are added)
         const advancedCourseData = [
@@ -7258,8 +7268,13 @@ docker exec techshop-jenkins cat /var/jenkins_home/secrets/initialAdminPassword<
         ];
 
         // --- State ---
-        // Progress is stored per-course: { basic: Set, advanced: Set, final: Set }
-        const allProgress = { basic: new Set(), advanced: new Set(), final: new Set() };
+        // Progress is stored per-course using a Proxy so any course ID gets a Set
+        const allProgress = new Proxy({ basic: new Set(), advanced: new Set(), final: new Set() }, {
+            get(target, prop) {
+                if (!(prop in target)) target[prop] = new Set();
+                return target[prop];
+            }
+        });
 
         let state = {
             get completedSteps() { return allProgress[activeCourse]; },
@@ -7276,14 +7291,20 @@ docker exec techshop-jenkins cat /var/jenkins_home/secrets/initialAdminPassword<
 
         // --- Helpers ---
         // DB-loaded course data (populated from API on init)
-        const dbCourseData = { basic: null, advanced: null, final: null };
+        const dbCourseData = {};
 
         function getActiveCourseData() {
             // Use DB data if loaded, fall back to hardcoded
             if (dbCourseData[activeCourse]) return dbCourseData[activeCourse];
-            if (activeCourse === 'advanced') return advancedCourseData;
-            if (activeCourse === 'final') return finalCourseData;
-            return courseData;
+            // Only use hardcoded fallbacks for testing courses
+            const userCourseId = window.__USER_COURSE_ID__ || 'basic';
+            if (userCourseId === 'testing' || userCourseId === 'basic') {
+                if (activeCourse === 'advanced') return advancedCourseData;
+                if (activeCourse === 'final') return finalCourseData;
+                return courseData;
+            }
+            // For other courses, no hardcoded fallback
+            return [];
         }
 
         async function loadCourseFromDB(courseId) {
@@ -7902,29 +7923,37 @@ docker exec techshop-jenkins cat /var/jenkins_home/secrets/initialAdminPassword<
 
         async function loadProgressFromServer() {
             try {
-                const [r1, r2, r3] = await Promise.all([
-                    fetch('/api/progress?course=basic'),
-                    fetch('/api/progress?course=advanced'),
-                    fetch('/api/progress?course=final'),
-                ]);
+                const userCourseId = window.__USER_COURSE_ID__ || 'basic';
+                const courseLevelIds = window.__COURSE_LEVEL_IDS__;
+
+                // Determine which course IDs to load progress for
+                let courseIds;
+                if (userCourseId === 'testing') {
+                    courseIds = ['basic', 'advanced', 'final'];
+                } else if (courseLevelIds && courseLevelIds.length > 0) {
+                    courseIds = courseLevelIds;
+                } else {
+                    courseIds = [userCourseId];
+                }
+
+                const results = await Promise.all(
+                    courseIds.map(id => fetch(`/api/progress?course=${id}`).then(r => r.json()).catch(() => null))
+                );
 
                 let restoredLessonId = null;
                 let restoredStepIndex = null;
 
-                const load = async (res, key) => {
-                    if (!res.ok) return;
-                    const data = await res.json();
+                results.forEach((data, i) => {
+                    if (!data) return;
+                    const key = courseIds[i];
                     if (Array.isArray(data.completedSteps) && data.completedSteps.length > 0) {
                         allProgress[key] = new Set(data.completedSteps);
                     }
-                    // Restore position for the active course
                     if (key === activeCourse && data.lastLessonId) {
                         restoredLessonId  = data.lastLessonId;
                         restoredStepIndex = data.lastStepIndex ?? 0;
                     }
-                };
-
-                await Promise.all([load(r1,'basic'), load(r2,'advanced'), load(r3,'final')]);
+                });
 
                 // Apply restored position
                 if (restoredLessonId) {
@@ -8068,12 +8097,49 @@ docker exec techshop-jenkins cat /var/jenkins_home/secrets/initialAdminPassword<
         window.finalCourseData    = finalCourseData;
 
         (async function init() {
-            // Load all courses from DB in parallel (falls back to hardcoded if DB empty)
-            await Promise.all([
-                loadCourseFromDB('basic'),
-                loadCourseFromDB('advanced'),
-                loadCourseFromDB('final'),
-            ]);
+            const userCourseId = window.__USER_COURSE_ID__ || 'basic';
+            const courseLevelIds = window.__COURSE_LEVEL_IDS__;
+            const courseLevels = window.__COURSE_LEVELS__ || [];
+
+            // Store course title for switchCourse
+            const levels = courseLevels.length > 0 ? courseLevels : (userCourseId === 'testing' ? [
+                { id: 'basic', title: 'Базовый курс' },
+                { id: 'advanced', title: 'Продвинутый курс' },
+                { id: 'final', title: 'Финальный курс' },
+            ] : []);
+            window.__COURSE_LEVELS__ = levels;
+            window.__COURSE_TITLE__ = levels.length > 0 ? '' : '';
+
+            // Set sidebar title based on user's course
+            const sidebarTitle = document.getElementById('sidebar-course-title');
+            if (sidebarTitle) {
+                if (userCourseId === 'testing') {
+                    sidebarTitle.textContent = 'Тестирование ПО';
+                } else {
+                    // Fetch course title from API
+                    try {
+                        const r = await fetch('/api/courses');
+                        const courses = await r.json();
+                        const myCourse = courses.find(c => c.id === userCourseId);
+                        if (myCourse) sidebarTitle.textContent = myCourse.title;
+                    } catch(e) {}
+                }
+            }
+
+            if (userCourseId === 'testing') {
+                // Load all 3 levels for testing course
+                await Promise.all([
+                    loadCourseFromDB('basic'),
+                    loadCourseFromDB('advanced'),
+                    loadCourseFromDB('final'),
+                ]);
+            } else if (courseLevelIds && courseLevelIds.length > 0) {
+                // Load levels for multi-level standalone course
+                await Promise.all(courseLevelIds.map(id => loadCourseFromDB(id)));
+            } else {
+                // Single course — load from DB
+                await loadCourseFromDB(userCourseId);
+            }
             await loadProgressFromServer();
             refreshAll();
         })();
@@ -10876,6 +10942,7 @@ docker exec techshop-jenkins cat /var/jenkins_home/secrets/initialAdminPassword<
         window.toggleCourseDropdown = function() {
             const dd    = document.getElementById('course-dropdown');
             const arrow = document.getElementById('switcher-arrow');
+            if (!dd) return;
             const open  = dd.classList.toggle('open');
             if (arrow) arrow.classList.toggle('open', open);
         };
@@ -10912,70 +10979,93 @@ docker exec techshop-jenkins cat /var/jenkins_home/secrets/initialAdminPassword<
                 return;
             }
 
-            // Lock advanced and final until basic is complete
-            if ((courseKey === 'advanced' || courseKey === 'final') && !isBasicCourseCompleted() && window.__USER_ROLE__ !== 'admin') {
-                // Show locked message inside the option
-                const optEl = document.getElementById(courseKey === 'advanced' ? 'co-advanced' : 'co-final');
-                if (optEl) {
-                    optEl.classList.add('course-option-shaking');
-                    setTimeout(() => optEl.classList.remove('course-option-shaking'), 600);
+            // If clicked a parent course, switch to its first level
+            const dropdownItems = window.__DROPDOWN_ITEMS__ || [];
+            const levels = window.__COURSE_LEVELS__ || [];
+            const levelIds = levels.map(l => l.id);
+
+            // Check if courseKey is a parent course (not in levelIds)
+            const isParent = dropdownItems.some(d => d.id === courseKey) && !levelIds.includes(courseKey);
+            if (isParent) {
+                // Find first child level of this parent
+                const parentItem = dropdownItems.find(d => d.id === courseKey);
+                // The parent's children follow it in the list
+                const parentIdx = dropdownItems.indexOf(parentItem);
+                const nextItem = dropdownItems[parentIdx + 1];
+                if (nextItem && nextItem.id !== courseKey) {
+                    courseKey = nextItem.id;
+                } else {
+                    toggleCourseDropdown();
+                    return;
                 }
-                // Show a small notice
-                let notice = document.getElementById('course-locked-notice');
-                if (!notice) {
-                    notice = document.createElement('div');
-                    notice.id = 'course-locked-notice';
-                    notice.className = 'course-locked-notice';
-                    const dd = document.getElementById('course-dropdown');
-                    if (dd) dd.appendChild(notice);
+            }
+
+            const levelIndex = levelIds.indexOf(courseKey);
+
+            // Lock levels until previous is complete
+            if (levelIndex > 0 && window.__USER_ROLE__ !== 'admin') {
+                const prevLevelId = levelIds[levelIndex - 1];
+                const prevProgress = allProgress[prevLevelId];
+                const prevData = dbCourseData[prevLevelId];
+                if (prevData && prevProgress) {
+                    let allDone = true;
+                    for (const chapter of prevData) {
+                        for (const lesson of (chapter.lessons || [])) {
+                            for (let i = 0; i < lesson.steps.length; i++) {
+                                if (!prevProgress.has(getStepId(lesson.id, i))) { allDone = false; break; }
+                            }
+                            if (!allDone) break;
+                        }
+                        if (!allDone) break;
+                    }
+                    if (!allDone) {
+                        const optEl = document.getElementById(`co-${courseKey}`);
+                        if (optEl) {
+                            optEl.classList.add('course-option-shaking');
+                            setTimeout(() => optEl.classList.remove('course-option-shaking'), 600);
+                        }
+                        let notice = document.getElementById('course-locked-notice');
+                        if (!notice) {
+                            notice = document.createElement('div');
+                            notice.id = 'course-locked-notice';
+                            notice.className = 'course-locked-notice';
+                            const dd = document.getElementById('course-dropdown');
+                            if (dd) dd.appendChild(notice);
+                        }
+                        notice.textContent = '🔒 Сначала завершите предыдущий уровень';
+                        notice.style.opacity = '1';
+                        setTimeout(() => { if (notice) notice.style.opacity = '0'; }, 3000);
+                        return;
+                    }
                 }
-                notice.textContent = '🔒 Сначала завершите базовый курс полностью';
-                notice.style.opacity = '1';
-                setTimeout(() => { if (notice) notice.style.opacity = '0'; }, 3000);
-                return;
             }
 
             activeCourse = courseKey;
 
-            // Update UI badges
-            const basicOpt = document.getElementById('co-basic');
-            const advOpt   = document.getElementById('co-advanced');
-            const finalOpt = document.getElementById('co-final');
-            const basicBadge = document.getElementById('co-basic-badge');
-            const advBadge   = document.getElementById('co-advanced-badge');
-            const finalBadge = document.getElementById('co-final-badge');
+            // Update UI badges dynamically from dropdown items
+            const dropdownIds = dropdownItems.map(l => l.id);
 
-            // Reset all
-            basicOpt?.classList.remove('active-course');
-            advOpt?.classList.remove('active-course');
-            finalOpt?.classList.remove('active-course');
-
-            if (courseKey === 'basic') {
-                basicOpt?.classList.add('active-course');
-                if (basicBadge) { basicBadge.textContent = 'Текущий'; basicBadge.className = 'course-option-badge badge-active'; }
-                if (advBadge)   { advBadge.textContent   = 'Новый';   advBadge.className   = 'course-option-badge badge-new'; }
-                if (finalBadge) { finalBadge.textContent = 'Новый';   finalBadge.className = 'course-option-badge badge-final'; }
-            } else if (courseKey === 'advanced') {
-                advOpt?.classList.add('active-course');
-                if (advBadge)   { advBadge.textContent   = 'Текущий'; advBadge.className   = 'course-option-badge badge-active'; }
-                if (basicBadge) { basicBadge.textContent = 'Базовый'; basicBadge.className = 'course-option-badge badge-new'; }
-                if (finalBadge) { finalBadge.textContent = 'Новый';   finalBadge.className = 'course-option-badge badge-final'; }
-            } else {
-                finalOpt?.classList.add('active-course');
-                if (finalBadge) { finalBadge.textContent = 'Текущий'; finalBadge.className = 'course-option-badge badge-active'; }
-                if (basicBadge) { basicBadge.textContent = 'Базовый'; basicBadge.className = 'course-option-badge badge-new'; }
-                if (advBadge)   { advBadge.textContent   = 'Продвинутый'; advBadge.className = 'course-option-badge badge-new'; }
-            }
+            dropdownIds.forEach(id => {
+                const opt = document.getElementById(`co-${id}`);
+                const badge = document.getElementById(`co-${id}-badge`);
+                if (opt) opt.classList.toggle('active-course', id === courseKey);
+                if (badge) {
+                    badge.textContent = id === courseKey ? 'Текущий' : 'Новый';
+                    badge.className = `course-option-badge ${id === courseKey ? 'badge-active' : 'badge-new'}`;
+                }
+            });
 
             // Update sidebar title
             const sidebarTitle = document.getElementById('sidebar-course-title');
             if (sidebarTitle) {
-                if (courseKey === 'advanced') {
-                    sidebarTitle.innerHTML = 'Тестирование ПО <span class="advanced-badge">Продвинутый</span>';
-                } else if (courseKey === 'final') {
-                    sidebarTitle.innerHTML = 'Тестирование ПО <span class="final-badge">Финальный</span>';
+                const currentLevel = levels.find(l => l.id === courseKey);
+                const parentTitle = window.__COURSE_TITLE__ || '';
+                const clickedItem = dropdownItems.find(d => d.id === courseKey);
+                const itemTitle = clickedItem?.title || courseKey;
+                if (currentLevel && levels.length > 1) {
+                    sidebarTitle.innerHTML = `${parentTitle} <span class="advanced-badge">${currentLevel.title}</span>`;
                 } else {
-                    sidebarTitle.textContent = 'Тестирование ПО';
+                    sidebarTitle.textContent = parentTitle || itemTitle;
                 }
             }
 
