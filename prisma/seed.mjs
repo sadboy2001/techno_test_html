@@ -159,6 +159,8 @@ async function seedCourse(courseId, courseTitle, chapters, parentId, icon) {
             practiceType:  step.practiceType || null,
             description:   step.description || null,
             taskId:        step.taskId        || null,
+            diagramType:   step.diagramType   || null,
+            mmType:        step.mmType        || null,
           }
         })
         totalSteps++
