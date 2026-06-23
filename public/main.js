@@ -9001,7 +9001,9 @@ docker exec techshop-jenkins cat /var/jenkins_home/secrets/initialAdminPassword<
                     if (!v.trim()) return [false,'Обязательное поле'];
                     const lines = v.split('\n').filter(l => l.trim().length > 0);
                     if (lines.length < 2) return [false,'Укажите минимум 2 шага'];
-                    return [true,'✓'];
+                    const hasData = /stage|login|логин|пароль|pass|значение|нажать|открыть|ввести|применить/i.test(v);
+                    if (!hasData) return [false,'Опишите конкретные действия'];
+                    return [true,'✓ Шаги детализированы'];
                 }
             },
             expected: {
