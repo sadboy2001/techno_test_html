@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import ConfirmModal from './ConfirmModal'
+import MiniCalendar from './MiniCalendar'
 
 type Progress = { course: string; completedSteps: string; updatedAt: string }
 type User = { id: string; name: string | null; email: string; role: string; createdAt: string; progress: Progress[] }
@@ -64,13 +65,11 @@ export default function AdminUsers() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <label style={{ fontSize: 11, color: '#666' }}>С:</label>
-            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-              style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #2a2a2a', background: '#0f0f0f', color: '#e0e0e0', fontSize: 12 }} />
+            <MiniCalendar value={dateFrom} onChange={setDateFrom} placeholder="Начало" />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <label style={{ fontSize: 11, color: '#666' }}>По:</label>
-            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-              style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #2a2a2a', background: '#0f0f0f', color: '#e0e0e0', fontSize: 12 }} />
+            <MiniCalendar value={dateTo} onChange={setDateTo} placeholder="Конец" />
           </div>
           <button onClick={exportExcel} style={{
             padding: '6px 14px', borderRadius: 7, border: '1px solid #2a2a2a',
