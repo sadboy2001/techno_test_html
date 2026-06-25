@@ -21,40 +21,30 @@ export async function GET(request: Request) {
   const dateTo = searchParams.get('to')
   const filterCourse = searchParams.get('course')
 
-  const where: any = {}
+  const dateWhere: any = {}
   if (dateFrom || dateTo) {
-    where.createdAt = {}
-    if (dateFrom) where.createdAt.gte = new Date(dateFrom)
+    dateWhere.createdAt = {}
+    if (dateFrom) dateWhere.createdAt.gte = new Date(dateFrom)
     if (dateTo) {
       const to = new Date(dateTo)
       to.setHours(23, 59, 59, 999)
-      where.createdAt.lte = to
+      dateWhere.createdAt.lte = to
     }
   }
-  if (filterCourse) {
-    where.courseId = filterCourse
-  }
 
-  const [users, allCourses] = await Promise.all([
-    prisma.user.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      include: { progress: true },
-    }),
-    prisma.course.findMany({
-      include: {
-        chapters: {
-          include: {
-            lessons: {
-              include: {
-                steps: { select: { id: true } }
-              }
+  const allCourses = await prisma.course.findMany({
+    include: {
+      chapters: {
+        include: {
+          lessons: {
+            include: {
+              steps: { select: { id: true } }
             }
           }
         }
       }
-    }),
-  ])
+    }
+  })
 
   // Total steps per course ID
   const totalStepsMap: Record<string, number> = {}
@@ -69,9 +59,47 @@ export async function GET(request: Request) {
   }
 
   // Find all level course IDs (children with parentId)
-  const levelCourseIds = allCourses
-    .filter(c => c.parentId)
-    .map(c => c.id)
+  const levelCourseIds = allCourses.filter(c => c.parentId).map(c => c.id)
+
+  // Build user filter based on course/level selection
+  let users: any[] = []
+
+  if (filterCourse) {
+    // Check if it's a parent course or a level
+    const isParentCourse = allCourses.some(c => c.id === filterCourse && !c.parentId)
+    const isLevel = allCourses.some(c => c.id === filterCourse && c.parentId)
+
+    if (isLevel) {
+      // Filter by level: find users who have progress in this specific level
+      users = await prisma.user.findMany({
+        where: {
+          ...dateWhere,
+          progress: { some: { course: filterCourse } },
+        },
+        orderBy: { createdAt: 'desc' },
+        include: { progress: true },
+      })
+    } else if (isParentCourse) {
+      // Filter by parent course: find users with courseId matching
+      users = await prisma.user.findMany({
+        where: { ...dateWhere, courseId: filterCourse },
+        orderBy: { createdAt: 'desc' },
+        include: { progress: true },
+      })
+    } else {
+      users = await prisma.user.findMany({
+        where: dateWhere,
+        orderBy: { createdAt: 'desc' },
+        include: { progress: true },
+      })
+    }
+  } else {
+    users = await prisma.user.findMany({
+      where: dateWhere,
+      orderBy: { createdAt: 'desc' },
+      include: { progress: true },
+    })
+  }
 
   const rows = users.map(user => {
     const courseId = user.courseId || ''
@@ -99,7 +127,6 @@ export async function GET(request: Request) {
     }
     const overallPercent = totalAll > 0 ? Math.round((totalCompleted / totalAll) * 100) : 0
 
-    // Build row
     const row: Record<string, any> = {
       'Имя': user.name || '',
       'Email': user.email,
@@ -121,8 +148,8 @@ export async function GET(request: Request) {
 
     // Last lesson info
     const lastLessons = user.progress
-      .filter(p => p.lastLessonId)
-      .map(p => `${LEVEL_NAMES[p.course] || p.course}: ${p.lastLessonId}`)
+      .filter((p: any) => p.lastLessonId)
+      .map((p: any) => `${LEVEL_NAMES[p.course] || p.course}: ${p.lastLessonId}`)
     row['Последние уроки'] = lastLessons.join(', ') || '—'
     row['Дата регистрации'] = new Date(user.createdAt).toLocaleDateString('ru-RU')
 
@@ -130,10 +157,9 @@ export async function GET(request: Request) {
   })
 
   const wb = XLSX.utils.book_new()
-  const ws = XLSX.utils.json_to_sheet(rows)
+  const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ 'Имя': 'Нет данных по фильтру' }])
 
-  // Auto-fit columns
-  const keys = Object.keys(rows[0] || {})
+  const keys = Object.keys(rows[0] || { 'Имя': '' })
   ws['!cols'] = keys.map(k => {
     if (k.includes('Email')) return { wch: 30 }
     if (k.includes('прогресс') || k.includes('Прогресс')) return { wch: 12 }
