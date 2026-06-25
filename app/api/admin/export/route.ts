@@ -115,10 +115,18 @@ export async function GET(request: Request) {
       progressByLevel[levelId] = { completed, total, percent }
     }
 
-    // Total across all levels
+    // Determine which levels to show columns for
+    const isLevelFilter = filterCourse && levelCourseIds.includes(filterCourse)
+    const isParentFilter = filterCourse && !isLevelFilter && allCourses.some(c => c.id === filterCourse && !c.parentId)
+    const levelsToShow = isLevelFilter ? [filterCourse] : (isParentFilter ? levelCourseIds.filter(l => {
+      const parent = allCourses.find(c => c.id === l)
+      return parent?.parentId === filterCourse
+    }) : levelCourseIds)
+
+    // Total across filtered levels
     let totalCompleted = 0
     let totalAll = 0
-    for (const lvl of levelCourseIds) {
+    for (const lvl of levelsToShow) {
       const pr = progressByLevel[lvl]
       if (pr) {
         totalCompleted += pr.completed
@@ -132,23 +140,36 @@ export async function GET(request: Request) {
       'Email': user.email,
       'Роль': user.role,
       'Курс': courseId,
-      'Пройдено (всего)': totalCompleted,
-      'Всего этапов': totalAll,
-      'Общий прогресс': totalAll > 0 ? `${overallPercent}%` : '—',
     }
 
-    // Add per-level columns
-    for (const lvl of levelCourseIds) {
+    // Add per-level columns only for filtered levels
+    if (levelsToShow.length === 1) {
+      const lvl = levelsToShow[0]
       const pr = progressByLevel[lvl]
       const name = LEVEL_NAMES[lvl] || lvl
-      row[`${name}: пройдено`] = pr ? pr.completed : 0
-      row[`${name}: этапов`] = pr ? pr.total : (totalStepsMap[lvl] || 0)
-      row[`${name}: прогресс`] = pr ? `${pr.percent}%` : '—'
+      row['Пройдено'] = pr ? pr.completed : 0
+      row['Всего этапов'] = pr ? pr.total : (totalStepsMap[lvl] || 0)
+      row['Прогресс'] = pr ? `${pr.percent}%` : '—'
+    } else if (levelsToShow.length > 1) {
+      row['Пройдено (всего)'] = totalCompleted
+      row['Всего этапов'] = totalAll
+      row['Общий прогресс'] = totalAll > 0 ? `${overallPercent}%` : '—'
+      for (const lvl of levelsToShow) {
+        const pr = progressByLevel[lvl]
+        const name = LEVEL_NAMES[lvl] || lvl
+        row[`${name}: пройдено`] = pr ? pr.completed : 0
+        row[`${name}: этапов`] = pr ? pr.total : (totalStepsMap[lvl] || 0)
+        row[`${name}: прогресс`] = pr ? `${pr.percent}%` : '—'
+      }
+    } else {
+      row['Пройдено (всего)'] = totalCompleted
+      row['Всего этапов'] = totalAll
+      row['Общий прогресс'] = totalAll > 0 ? `${overallPercent}%` : '—'
     }
 
-    // Last lesson info
+    // Last lesson info (filtered)
     const lastLessons = user.progress
-      .filter((p: any) => p.lastLessonId)
+      .filter((p: any) => p.lastLessonId && levelsToShow.includes(p.course))
       .map((p: any) => `${LEVEL_NAMES[p.course] || p.course}: ${p.lastLessonId}`)
     row['Последние уроки'] = lastLessons.join(', ') || '—'
     row['Дата регистрации'] = new Date(user.createdAt).toLocaleDateString('ru-RU')
