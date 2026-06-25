@@ -6,24 +6,34 @@ import MiniCalendar from './MiniCalendar'
 
 type Progress = { course: string; completedSteps: string; updatedAt: string }
 type User = { id: string; name: string | null; email: string; role: string; createdAt: string; progress: Progress[] }
+type CourseInfo = { id: string; title: string; levels?: { id: string; title: string }[] | null }
 
 export default function AdminUsers() {
   const [users, setUsers] = useState<User[]>([])
+  const [courses, setCourses] = useState<CourseInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filterCourse, setFilterCourse] = useState('')
+  const [filterLevel, setFilterLevel] = useState('')
   const [confirmRole, setConfirmRole] = useState<{ user: User; newRole: string } | null>(null)
 
   const load = () => {
     setLoading(true)
-    fetch('/api/admin/users').then(r => r.json()).then(data => {
-      setUsers(Array.isArray(data) ? data : [])
+    Promise.all([
+      fetch('/api/admin/users').then(r => r.json()),
+      fetch('/api/courses').then(r => r.json()),
+    ]).then(([usersData, coursesData]) => {
+      setUsers(Array.isArray(usersData) ? usersData : [])
+      setCourses(Array.isArray(coursesData) ? coursesData : [])
       setLoading(false)
     })
   }
 
   useEffect(load, [])
+
+  const selectedCourse = courses.find(c => c.id === filterCourse)
+  const levels = selectedCourse?.levels || []
 
   const toggleAdmin = async (user: User) => {
     const newRole = user.role === 'admin' ? 'user' : 'admin'
@@ -45,7 +55,8 @@ export default function AdminUsers() {
     const params = new URLSearchParams()
     if (dateFrom) params.set('from', dateFrom)
     if (dateTo) params.set('to', dateTo)
-    if (filterCourse) params.set('course', filterCourse)
+    if (filterLevel) params.set('course', filterLevel)
+    else if (filterCourse) params.set('course', filterCourse)
     window.open(`/api/admin/export?${params.toString()}`, '_blank')
   }
 
@@ -67,15 +78,28 @@ export default function AdminUsers() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <label style={{ fontSize: 11, color: '#666' }}>Курс:</label>
-            <select value={filterCourse} onChange={e => setFilterCourse(e.target.value)}
+            <select value={filterCourse} onChange={e => { setFilterCourse(e.target.value); setFilterLevel('') }}
               style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #2a2a2a', background: '#0f0f0f', color: '#e0e0e0', fontSize: 12 }}>
               <option value="">Все курсы</option>
-              <option value="testing">Тестирование ПО</option>
-              <option value="basic">Базовый</option>
-              <option value="advanced">Продвинутый</option>
-              <option value="final">Финальный</option>
+              {courses.map(c => (
+                <option key={c.id} value={c.id}>{c.title}</option>
+              ))}
             </select>
           </div>
+
+          {levels.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <label style={{ fontSize: 11, color: '#666' }}>Уровень:</label>
+              <select value={filterLevel} onChange={e => setFilterLevel(e.target.value)}
+                style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #2a2a2a', background: '#0f0f0f', color: '#e0e0e0', fontSize: 12 }}>
+                <option value="">Все уровни</option>
+                {levels.map(l => (
+                  <option key={l.id} value={l.id}>{l.title}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <label style={{ fontSize: 11, color: '#666' }}>С:</label>
             <MiniCalendar value={dateFrom} onChange={setDateFrom} placeholder="Начало" />
