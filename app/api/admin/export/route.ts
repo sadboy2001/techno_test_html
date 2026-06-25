@@ -6,11 +6,10 @@ import * as XLSX from 'xlsx'
 
 export const dynamic = 'force-dynamic'
 
-const COURSE_NAMES: Record<string, string> = {
-  testing: 'Тестирование ПО',
-  basic: 'Тестирование ПО — Базовый',
-  advanced: 'Тестирование ПО — Продвинутый',
-  final: 'Тестирование ПО — Финальный',
+const LEVEL_NAMES: Record<string, string> = {
+  basic: 'Базовый',
+  advanced: 'Продвинутый',
+  final: 'Финальный',
 }
 
 export async function GET(request: Request) {
@@ -32,7 +31,7 @@ export async function GET(request: Request) {
     }
   }
 
-  const [users, courses] = await Promise.all([
+  const [users, allCourses] = await Promise.all([
     prisma.user.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -53,87 +52,92 @@ export async function GET(request: Request) {
     }),
   ])
 
-  // Build total steps per course
-  const courseTotalSteps: Record<string, number> = {}
-  for (const course of courses) {
+  // Total steps per course ID
+  const totalStepsMap: Record<string, number> = {}
+  for (const course of allCourses) {
     let total = 0
     for (const ch of course.chapters) {
       for (const lesson of ch.lessons) {
         total += lesson.steps.length
       }
     }
-    courseTotalSteps[course.id] = total
+    totalStepsMap[course.id] = total
   }
 
-  const rows = users.map(user => {
-    // Find the user's course
-    const courseId = user.courseId || ''
-    const courseTitle = COURSE_NAMES[courseId] || courseId
+  // Find all level course IDs (children with parentId)
+  const levelCourseIds = allCourses
+    .filter(c => c.parentId)
+    .map(c => c.id)
 
-    // Calculate progress
-    let completedSteps = 0
-    let totalSteps = 0
-    let lastLesson = ''
+  const rows = users.map(user => {
+    const courseId = user.courseId || ''
+
+    // Build progress per level
+    const progressByLevel: Record<string, { completed: number; total: number; percent: number }> = {}
 
     for (const p of user.progress) {
-      try {
-        const steps = JSON.parse(p.completedSteps)
-        completedSteps += steps.length
-      } catch {}
-      if (p.lastLessonId) lastLesson = p.lastLessonId
+      const levelId = p.course
+      const completed = (() => { try { return JSON.parse(p.completedSteps).length } catch { return 0 } })()
+      const total = totalStepsMap[levelId] || 0
+      const percent = total > 0 ? Math.round((completed / total) * 100) : 0
+      progressByLevel[levelId] = { completed, total, percent }
     }
 
-    // For testing course, sum all 3 levels
-    if (courseId === 'testing') {
-      for (const p of user.progress) {
-        const courseSteps = courseTotalSteps[p.course] || 0
-        totalSteps += courseSteps
-      }
-    } else {
-      // For standalone courses, sum all levels
-      const parentCourse = courses.find(c => c.id === courseId)
-      if (parentCourse) {
-        // Check if it has levels (children)
-        const childCourses = courses.filter(c => c.parentId === courseId)
-        if (childCourses.length > 0) {
-          for (const child of childCourses) {
-            totalSteps += courseTotalSteps[child.id] || 0
-          }
-        } else {
-          totalSteps = courseTotalSteps[courseId] || 0
-        }
+    // Total across all levels
+    let totalCompleted = 0
+    let totalAll = 0
+    for (const lvl of levelCourseIds) {
+      const pr = progressByLevel[lvl]
+      if (pr) {
+        totalCompleted += pr.completed
+        totalAll += pr.total
       }
     }
+    const overallPercent = totalAll > 0 ? Math.round((totalCompleted / totalAll) * 100) : 0
 
-    const percent = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0
-
-    return {
+    // Build row
+    const row: Record<string, any> = {
       'Имя': user.name || '',
       'Email': user.email,
       'Роль': user.role,
-      'Курс': courseTitle,
-      'Этапов пройдено': completedSteps,
-      'Всего этапов': totalSteps,
-      'Прогресс': totalSteps > 0 ? `${percent}%` : '—',
-      'Последний урок': lastLesson,
-      'Дата регистрации': new Date(user.createdAt).toLocaleDateString('ru-RU'),
+      'Курс': courseId,
+      'Пройдено (всего)': totalCompleted,
+      'Всего этапов': totalAll,
+      'Общий прогресс': totalAll > 0 ? `${overallPercent}%` : '—',
     }
+
+    // Add per-level columns
+    for (const lvl of levelCourseIds) {
+      const pr = progressByLevel[lvl]
+      const name = LEVEL_NAMES[lvl] || lvl
+      row[`${name}: пройдено`] = pr ? pr.completed : 0
+      row[`${name}: этапов`] = pr ? pr.total : (totalStepsMap[lvl] || 0)
+      row[`${name}: прогресс`] = pr ? `${pr.percent}%` : '—'
+    }
+
+    // Last lesson info
+    const lastLessons = user.progress
+      .filter(p => p.lastLessonId)
+      .map(p => `${LEVEL_NAMES[p.course] || p.course}: ${p.lastLessonId}`)
+    row['Последние уроки'] = lastLessons.join(', ') || '—'
+    row['Дата регистрации'] = new Date(user.createdAt).toLocaleDateString('ru-RU')
+
+    return row
   })
 
   const wb = XLSX.utils.book_new()
   const ws = XLSX.utils.json_to_sheet(rows)
 
-  ws['!cols'] = [
-    { wch: 25 },
-    { wch: 30 },
-    { wch: 10 },
-    { wch: 25 },
-    { wch: 14 },
-    { wch: 13 },
-    { wch: 10 },
-    { wch: 25 },
-    { wch: 18 },
-  ]
+  // Auto-fit columns
+  const keys = Object.keys(rows[0] || {})
+  ws['!cols'] = keys.map(k => {
+    if (k.includes('Email')) return { wch: 30 }
+    if (k.includes('прогресс') || k.includes('Прогресс')) return { wch: 12 }
+    if (k.includes('этапов') || k.includes('пройдено')) return { wch: 12 }
+    if (k.includes('Последние')) return { wch: 40 }
+    if (k.includes('Дата')) return { wch: 16 }
+    return { wch: 18 }
+  })
 
   XLSX.utils.book_append_sheet(wb, ws, 'Студенты')
 
