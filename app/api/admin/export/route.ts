@@ -19,6 +19,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const dateFrom = searchParams.get('from')
   const dateTo = searchParams.get('to')
+  const filterCourse = searchParams.get('course')
 
   const where: any = {}
   if (dateFrom || dateTo) {
@@ -29,6 +30,9 @@ export async function GET(request: Request) {
       to.setHours(23, 59, 59, 999)
       where.createdAt.lte = to
     }
+  }
+  if (filterCourse) {
+    where.courseId = filterCourse
   }
 
   const [users, allCourses] = await Promise.all([

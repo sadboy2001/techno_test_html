@@ -12,6 +12,7 @@ export default function AdminUsers() {
   const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [filterCourse, setFilterCourse] = useState('')
   const [confirmRole, setConfirmRole] = useState<{ user: User; newRole: string } | null>(null)
 
   const load = () => {
@@ -44,6 +45,7 @@ export default function AdminUsers() {
     const params = new URLSearchParams()
     if (dateFrom) params.set('from', dateFrom)
     if (dateTo) params.set('to', dateTo)
+    if (filterCourse) params.set('course', filterCourse)
     window.open(`/api/admin/export?${params.toString()}`, '_blank')
   }
 
@@ -62,7 +64,18 @@ export default function AdminUsers() {
           <h1 style={{ fontSize:22, fontWeight:700, marginBottom:6, color:'#fff' }}>Пользователи</h1>
           <p style={{ color:'#666', fontSize:14 }}>Всего: {users.length}</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <label style={{ fontSize: 11, color: '#666' }}>Курс:</label>
+            <select value={filterCourse} onChange={e => setFilterCourse(e.target.value)}
+              style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #2a2a2a', background: '#0f0f0f', color: '#e0e0e0', fontSize: 12 }}>
+              <option value="">Все курсы</option>
+              <option value="testing">Тестирование ПО</option>
+              <option value="basic">Базовый</option>
+              <option value="advanced">Продвинутый</option>
+              <option value="final">Финальный</option>
+            </select>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <label style={{ fontSize: 11, color: '#666' }}>С:</label>
             <MiniCalendar value={dateFrom} onChange={setDateFrom} placeholder="Начало" />
